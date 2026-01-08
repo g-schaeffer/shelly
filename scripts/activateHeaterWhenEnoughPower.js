@@ -26,32 +26,39 @@ let RemoteShelly = {
 
 
 
-// Proxying the push/shift methods
-function push(arg, elements, max_size) {
-  if(elements.length >= max_size){
-      elements.splice(0, 1);
-  }
-  return elements.push(arg);
-}
-function getAverage(elements) {
-  let sum = 0;
-  for(i=0;i<elements.length;i++){
-    sum += elements[i];
-  }
-  return sum / elements.length;
-}
-function isFull(elements, max_size) {
-  return elements.length == max_size;
-}
-function printQueue(elements, max_size){
-  return "IsFull ? " + isFull(elements, max_size) + " Average " + getAverage(elements)
-}
-
-
-
-
-let heaterOne = RemoteShelly.getInstance("192.168.1.38");
-let waterPump = RemoteShelly.getInstance("192.168.1.20");
+let FixedQueue = {
+  push: function (arg) {
+      if(this.elements.length >= this.max_size){
+          this.elements.splice(0, 1);
+      }
+      return this.elements.push(arg);
+  },
+  getAverage: function () {
+    let sum = 0;
+    for(i=0;i<this.elements.length;i++){
+      sum += this.elements[i];
+    }
+    return sum / this.elements.length;
+  },
+  isFull : function () {
+    return this.elements.length == this.max_size;
+  },
+  clear : function () {
+    return this.elements = [];
+  },
+  printQueue : function (){
+    console.log("Queue "+this.name + ": isFull ? " + this.isFull() + ", average: " + this.getAverage())
+  },
+  getInstance: function (max_size, name) {
+    let fq = Object.create(this);
+    // remove static method
+    fq.getInstance = null;
+    fq.elements = [];
+    fq.max_size = max_size;
+    fq.name = name;
+    return fq;
+  },
+};
 
 
 
@@ -64,24 +71,27 @@ let CONFIG = {
 };
 
 
+let heaterOne = RemoteShelly.getInstance("192.168.1.38");
+let waterPump = RemoteShelly.getInstance("192.168.1.20");
+
 let my_user_data = {
   isTempoActive: false,
   isHeaterEcoMode : false,
   isWaterPump: false,
-  produced_queue: [],
-  consumed_queue: [],
+  produced : FixedQueue.getInstance(CONFIG.POWER_COUNTS_REQUIRED, "produced"),
+  consumed: FixedQueue.getInstance(CONFIG.POWER_COUNTS_REQUIRED, "consumed"),
 }
 
 function persistConsumedAndThen(response, error_code, error_message, user_data) {
-  push(response.act_power, user_data.consumed_queue, CONFIG.POWER_COUNTS_REQUIRED)
+  user_data.consumed.push(response.act_power)
 
-  // print("user_data.consumed = "+ printQueue(user_data.consumed_queue, CONFIG.POWER_COUNTS_REQUIRED))
-  // print("user_data.produced = "+ printQueue(user_data.produced_queue, CONFIG.POWER_COUNTS_REQUIRED))
-  let total_produced_power = getAverage(user_data.produced_queue)
-  let available_power = total_produced_power - getAverage(user_data.consumed_queue)
-  let trustable_metrics = isFull(user_data.consumed_queue, CONFIG.POWER_COUNTS_REQUIRED) && isFull(user_data.produced_queue, CONFIG.POWER_COUNTS_REQUIRED)
+  // user_data.consumed.printQueue()
+  // user_data.produced.printQueue()
+  let total_produced_power = user_data.produced.getAverage()
+  let available_power = total_produced_power - user_data.consumed.getAverage()
+  let trustable_metrics = user_data.consumed.isFull() && user_data.produced.isFull()
 
-  console.log("Available Power = "+ available_power + " - Trustable?" + trustable_metrics )
+  console.log("Available Power = "+ available_power + " - Trustable? " + trustable_metrics )
 
   if(!trustable_metrics){
     return;
@@ -111,7 +121,7 @@ function persistConsumedAndThen(response, error_code, error_message, user_data) 
     setHeaterEcoMode=false
   } else if (user_data.isHeaterEcoMode && user_data.isWaterPump &&
          available_power > (CONFIG.MARGIN_WATTS + CONFIG.HEATER_WATTS - CONFIG.WATER_PUMP_WATTS) &&
-          total_produced_power > (CONFIG.MARGIN_WATTS + CONFIG.HEATER_WATTS) ){
+         total_produced_power > (CONFIG.MARGIN_WATTS + CONFIG.HEATER_WATTS) ){
       // if 700W available and pump on, might try to shutdown water pump (and if total produced is at least enough)
       console.log("Call to set water pump OFF to free 1kW");
       shutdownWaterPump = true;
@@ -132,11 +142,11 @@ function persistConsumedAndThen(response, error_code, error_message, user_data) 
     waterPump.call("Switch.Set",
       {"id":"0", on: false},
       function (response, error_code, error_message) {
-       if(error_code != 200) {
+        if(error_code != 200) {
           print(JSON.stringify(response), error_code, error_message);
-       }
-       user_data.produced_queue = []
-       user_data.consumed_queue= []
+        }
+        user_data.produced.clear();
+        user_data.consumed.clear();
       }
     )
   }
@@ -148,8 +158,8 @@ function persistConsumedAndThen(response, error_code, error_message, user_data) 
         if(error_code != 200) {
           print(JSON.stringify(response), error_code, error_message);
         }
-        user_data.produced_queue = []
-        user_data.consumed_queue= []
+        user_data.produced.clear();
+        user_data.consumed.clear();
       }
     )
   }
@@ -157,7 +167,7 @@ function persistConsumedAndThen(response, error_code, error_message, user_data) 
 
 
 function persistProducedAndThenGetConsumed(response, error_code, error_message, user_data) {
-  push(-response.act_power, user_data.produced_queue, CONFIG.POWER_COUNTS_REQUIRED)
+  user_data.produced.push(-response.act_power)
   // Get total consumed power
   Shelly.call("EM1.GetStatus",
     {"id":"0"},
