@@ -6,18 +6,13 @@
 // "0 0 7 * * MON-FRI" --> Run at 7:00 every working day;
 // "0 30 23 30 * *" --> Run at 23:30 every 30th day of month.
 
-Shelly.call('Schedule.Create', {enable: true, timespec: "0 15-30 21 * * *", calls:
+// Script to Start Tempo Value Check each evening
+Shelly.call('Schedule.Create', {enable: true, timespec: "0 50 21 * * *", calls:
 [
   {method:"Script.Start", params:{id:2}},
 ]});
 
-Shelly.call('Schedule.Create', {enable: true, timespec: "30 15-30 21 * * *", calls:
-[
-  {method:"Script.Stop", params:{id:2}},
-]});
-
-
-Shelly.call('Schedule.Create', {enable: true, timespec: "0 0 1 * * *", calls:
-[
-  {method:"Script.Start", params:{id:1}},
-]});
+Shelly.call('Script.Stop', {"id": Shelly.getCurrentScriptId()},
+  function (response, error_code, error_message) {
+  }
+)
