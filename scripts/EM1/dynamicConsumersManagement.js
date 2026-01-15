@@ -86,15 +86,15 @@ let FixedQueue = {
 ////////////////////////////////////////////////////////////////////////////////////////////
 
 let scenes_config = {
-  cloud_url: "https://xxxxx.shelly.cloud",
-  auth_key: "xxxxxxx",
+  cloud_url: "",
+  auth_key: "",
   notif_scene_name: "Autom",
   notif_scene_id: "1768214869764",
 }
 
 
 let CONFIG = {
-  MARGIN_WATTS: 200,
+  MARGIN_WATTS: 50,
   WATER_PUMP_WATTS: 1000,
   HEATER_WATTS: 1500,
   LOOP_DELAY_SECONDS: 10,
@@ -116,7 +116,8 @@ let heaterOne = RemoteShelly.getInstance("192.168.1.38", "Radiateur Salon", func
     || (current_hour >= 16 && current_hour < 22)){
     return true;
   }
-  else if (current_day in [3,6,0] && current_hour >= 6 && current_hour < 10) {
+  else if ((current_day == 3 || current_day == 6 || current_day ==0)
+    && current_hour >= 6 && current_hour < 10) {
     return true;
   }
   return false;
@@ -142,6 +143,7 @@ let waterPump = RemoteShelly.getInstance("192.168.1.20", "Pompe filtration", nul
 
 let my_user_data = {
   isTempoActive: false,
+  isOverallOverrideActive: false,
   isHeaterOneEcoMode : false,
   isHeaterOneOverrideAllowed : false,
   isHeaterTwoEcoMode : false,
@@ -207,9 +209,11 @@ function updateDeviceSwitch(user_data, device, switchState, switchName){
 
 function findFirstHeater(ecoModeTarget, user_data){
   if (user_data.isHeaterOneEcoMode == ecoModeTarget
+      && !user_data.isOverallOverrideActive
       && !heaterOne.overrideAllowed ){
     return heaterOne;
   } else if (user_data.isHeaterTwoEcoMode == ecoModeTarget
+      && !user_data.isOverallOverrideActive
       && !heaterTwo.overrideAllowed ){
     return heaterTwo;
   } else {
@@ -221,10 +225,12 @@ function findFirstHeater(ecoModeTarget, user_data){
 function findFirstComfortHeaterWithoutSchedule(user_data, date){
   if (user_data.isHeaterOneEcoMode == false
       && !heaterOne.overrideAllowed
+      && !user_data.isOverallOverrideActive
       && !heaterOne.isScheduleActive(date)){
     return heaterOne;
   } else if (user_data.isHeaterTwoEcoMode == false
       && !heaterTwo.overrideAllowed
+      && !user_data.isOverallOverrideActive
       && !heaterTwo.isScheduleActive(date)){
     return heaterTwo;
   } else {
@@ -283,7 +289,7 @@ function performBusinessLogic(response, error_code, error_message, user_data) {
   let firstEcoHeater = findFirstHeater(true, my_user_data);
   if (firstEcoHeater){
     if (available_power > (CONFIG.MARGIN_WATTS + CONFIG.HEATER_WATTS)){
-      heaterMessage = "Enough power to start heater " + firstEcoHeater.name;
+      heaterMessage = "Demarrage " + firstEcoHeater.name + ": production suffisante";
       console.log(heaterMessage);
       targetHeater = firstEcoHeater;
       setHeaterEcoMode = false;
@@ -293,7 +299,7 @@ function performBusinessLogic(response, error_code, error_message, user_data) {
            available_power > (CONFIG.MARGIN_WATTS + CONFIG.HEATER_WATTS - CONFIG.WATER_PUMP_WATTS) &&
            total_produced_power > (CONFIG.MARGIN_WATTS + CONFIG.HEATER_WATTS)) {
         console.log("Enough power should be ok after pump shutdown "+firstEcoHeater.name);
-        heaterMessage = "Shutting down water pump to start heater "+firstEcoHeater.name;
+        heaterMessage = "Arret filtration: Tempo Actif, production suffisante pour demarrer "+firstEcoHeater.name;
         setWaterPumpMode = false;
       } else {
         if (!my_user_data.isTempoActive){
@@ -334,10 +340,10 @@ function performBusinessLogic(response, error_code, error_message, user_data) {
            available_power > (CONFIG.MARGIN_WATTS + CONFIG.HEATER_WATTS - CONFIG.WATER_PUMP_WATTS) &&
            total_produced_power > (CONFIG.MARGIN_WATTS + CONFIG.HEATER_WATTS)) {
           console.log("Enough power should be ok after pump shutdown to keep "+firstConfortHeater.name);
-          waterPumpMessage = "Shutting down water pump to keep heater "+firstConfortHeater.name
+          waterPumpMessage = "Arret filtration: Tempo Actif, production suffisante pour conserver "+firstConfortHeater.name
           setWaterPumpMode = false;
         } else {
-          heaterMessage = "Not enough power to keep "+firstConfortHeater.name+ ", shutting it down"
+          heaterMessage = "Arret "+firstConfortHeater.name+ ": mode confort et Tempo actif, production insuffisante"
           console.log(heaterMessage);
           targetHeater = firstConfortHeater;
           setHeaterEcoMode = true;
@@ -345,7 +351,7 @@ function performBusinessLogic(response, error_code, error_message, user_data) {
       } else {
         let firstConfortHeaterWithoutSchedule = findFirstComfortHeaterWithoutSchedule(my_user_data, date);
         if (firstConfortHeaterWithoutSchedule){
-          heaterMessage = "Heater " + firstConfortHeaterWithoutSchedule.name + " is comfort and currently not scheduled, shutting it down"
+          heaterMessage = "Arret "  + firstConfortHeaterWithoutSchedule.name + ": mode confort hors-programme, production insuffisante"
           console.log(heaterMessage);
           targetHeater = firstConfortHeaterWithoutSchedule;
           setHeaterEcoMode = true;
@@ -354,7 +360,7 @@ function performBusinessLogic(response, error_code, error_message, user_data) {
     } else {
       console.log ("No heater to shutdown")
       if (my_user_data.isTempoActive && my_user_data.isWaterPump) {
-        waterPumpMessage = "Tempo active and not enough power, shutting down water pump"
+        waterPumpMessage = "Tempo actif et production insuffisante, arret de la filtration"
         console.log(waterPumpMessage);
         setWaterPumpMode = false;
       }
@@ -386,7 +392,7 @@ function performBusinessLogic(response, error_code, error_message, user_data) {
 ////////////////////////////////////////////////////////////////////////////////////////////
 
 function StartProcess() {
-  // Get Boolean Status for ProEM TempoActive
+  // Get Boolean Status for TempoActive
   Shelly.call("Boolean.GetStatus", {"id":"200"},
     function (response, error_code, error_message) {
       if(error_code != 0){
@@ -394,15 +400,32 @@ function StartProcess() {
         return;
       }
       my_user_data.isTempoActive = response.value;
-      // Get WaterPump State
-      waterPump.call("Switch.GetStatus",
-        {"id":"0"},
-        function (response, error_code, error_message, user_data) {
-          persistWaterPumpAndThenGetHeaterOneState(response, error_code, error_message, user_data);
+      // Get Overall Override sate
+      Shelly.call("Boolean.GetStatus", {"id":"201"},
+        function (response, error_code, error_message) {
+          persistOverallOverrideAndThenGetWaterPumpState(response, error_code, error_message, my_user_data);
         },
         my_user_data
       )
     }
+  )
+}
+
+
+function persistOverallOverrideAndThenGetWaterPumpState(response, error_code, error_message, user_data){
+  if(error_code != 0){
+    console.log("Error calling overall override state " + error_code + " - message: '" + error_message + "'");
+    return;
+  }
+  my_user_data.isOverallOverrideActive = response.value
+
+  // Get WaterPump State
+  waterPump.call("Switch.GetStatus",
+    {"id":"0"},
+    function (response, error_code, error_message, user_data) {
+      persistWaterPumpAndThenGetHeaterOneState(response, error_code, error_message, user_data);
+    },
+    my_user_data
   )
 }
 
@@ -532,6 +555,14 @@ function persistConsumedAndThenPerformBusinessLogic(response, error_code, error_
 ////////////////////////////////////////////////////////////////////////////////////////////
 
 
-StartProcess()
+Shelly.call('KVS.Get',
+  {"key": "cloud-config"},
+  function (response, error_code, error_message) {
+    let parsed = JSON.parse(response.value);
+    scenes_config.cloud_url = parsed.cloud_url ;
+    scenes_config.auth_key = parsed.auth_key;
+    StartProcess();
+  }
+)
 // Verify every 10 secs
 Timer.set(CONFIG.LOOP_DELAY_SECONDS*1000, true, StartProcess)
